@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" 
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:int="http://www.springframework.org/schema/integration"	
+	xmlns:int-http="http://www.springframework.org/schema/integration/http"
+	xmlns:int-file="http://www.springframework.org/schema/integration/file"
+	xmlns:int-jms="http://www.springframework.org/schema/integration/jms"
+	xmlns:int-jdbc="http://www.springframework.org/schema/integration/jdbc"
+	xmlns:int-amqp="http://www.springframework.org/schema/integration/amqp"
+	xmlns:int-jpa="http://www.springframework.org/schema/integration/jpa"
+	xmlns:file="http://www.springframework.org/schema/integration/file"
+	xmlns:p="http://www.springframework.org/schema/p"
+	xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:util="http://www.springframework.org/schema/util"
+	xmlns:int-xml="http://www.springframework.org/schema/integration/xml"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+		http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd
+		http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration.xsd
+		http://www.springframework.org/schema/integration/http http://www.springframework.org/schema/integration/http/spring-integration-http.xsd
+		http://www.springframework.org/schema/integration/file http://www.springframework.org/schema/integration/file/spring-integration-file.xsd
+		http://www.springframework.org/schema/integration/jms http://www.springframework.org/schema/integration/jms/spring-integration-jms.xsd
+		http://www.springframework.org/schema/integration/jdbc http://www.springframework.org/schema/integration/jdbc/spring-integration-jdbc.xsd 
+		http://www.springframework.org/schema/integration/amqp http://www.springframework.org/schema/integration/amqp/spring-integration-amqp.xsd
+		http://www.springframework.org/schema/integration/jpa http://www.springframework.org/schema/integration/jpa/spring-integration-jpa.xsd
+		http://www.springframework.org/schema/tx http://www.springframework.org/schema/tx/spring-tx-2.5.xsd
+		http://www.springframework.org/schema/integration/file
+        http://www.springframework.org/schema/integration/file/spring-integration-file.xsd
+		http://www.springframework.org/schema/integration/xml 
+		http://www.springframework.org/schema/integration/xml/spring-integration-xml.xsd
+		http://www.springframework.org/schema/util http://www.springframework.org/schema/util/spring-util.xsd">
+
+	<context:component-scan base-package="com.spring.intg" />
+
+	<int:inbound-channel-adapter channel="PoRequestChannel"	expression="''">
+		<int:poller fixed-delay="${app.poll-interval}" ></int:poller>
+	</int:inbound-channel-adapter>
+	
+	<int-jpa:retrieving-outbound-gateway entity-manager-factory="entityManagerFactory"
+		request-channel="PoRequestChannel"
+		reply-channel="PoReplyChannel"		    
+		jpa-query="select p from PO p  where 21 > rownum order by p.ORDER_NO asc">
+	</int-jpa:retrieving-outbound-gateway>
+	
+	<int:channel id="PoReplyChannel"/>	
+	
+	<int:chain id="trandformerChain" input-channel="PoReplyChannel"
+		output-channel="transformResultChannel">
+		<int:transformer ref="ModelToTargetTransformer" />
+	</int:chain>
+
+	<bean id="ModelToTargetTransformer"
+		class="com.spring.intg.transformer.payloadToPOContainerTransformer">
+	</bean>	
+	
+	<int:channel id="transformResultChannel"/>	
+
+	<int-xml:marshalling-transformer id="marshaller" marshaller="marshallerUnmarshaller" result-type="StringResult"  input-channel="transformResultChannel" output-channel="marshallOut"/>
+
+ 	<bean id="marshallerUnmarshaller" class="org.springframework.oxm.jaxb.Jaxb2Marshaller" >
+		<property name="classesToBeBound">
+			<list>
+			<value>com.spring.intg.targetdomain.POXmlContainer</value>
+			</list>
+		</property>
+	</bean> 
+	 
+	<int:channel id="marshallOut"/>
+	
+	<int:chain id="marshallOutChain" input-channel="marshallOut"
+		output-channel="filesOut">
+		<int:transformer expression="payload.toString()"/>
+		<int:service-activator ref="handler" />
+	</int:chain>
+ 
+     <bean id="handler" class="com.spring.intg.service.FileHandler" />
+     
+    <file:outbound-channel-adapter id="filesOut" directory="file:output" 
+    filename-generator-expression="'poList-' + new java.text.SimpleDateFormat('yyyyMMdd-HHmmss').format(new java.util.Date()) + '.' + 'XML'"/>
+    
+   
+   	<bean id="dataSource"
+        class="org.springframework.jdbc.datasource.DriverManagerDataSource">
+        <property name="driverClassName" value="${spring.datasource.driverClassName}" />
+        <property name="url"
+            value="${spring.datasource.url}" />
+        <property name="username" value="${spring.datasource.username}" />
+        <property name="password" value="${spring.datasource.password}" />
+    </bean>
+ 
+    <!-- JPA EntityManagerFactory -->
+    <bean id="entityManagerFactory"
+        class="org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean"
+        p:dataSource-ref="dataSource">
+         <property name="packagesToScan" value="com.spring.intg.domain" />
+         <property name="jpaVendorAdapter">
+            <bean class="org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter">
+                <property name="database" value="ORACLE" />
+                <property name="showSql" value="true" />
+            </bean>
+        </property>
+    </bean>
+ 
+    <!-- Transaction manager for a single JPA EntityManagerFactory (alternative to JTA) -->
+    <bean id="transactionManager" class="org.springframework.orm.jpa.JpaTransactionManager"
+        p:entityManagerFactory-ref="entityManagerFactory" /> 
+ 
+    <!-- Activates various annotations to be detected in bean classes for eg @Autowired -->
+    <context:annotation-config />
+         
+    <!-- enable the configuration of transactional behavior based on annotations -->
+    <tx:annotation-driven transaction-manager="transactionManager" proxy-target-class="true" /> 	
+
+</beans>
